@@ -12,7 +12,7 @@ final class Powers {
 
     static let helpText = """
     I can: open Safari · quit Spotify · search cute cats · open youtube · focus 25 · nap. \
-    Add a Claude API key from the 🧞 menu and I can chat about anything!
+    Install Claude Code (claude.com/claude-code) and sign in, and I can chat about anything!
     """
 
     static func isYes(_ text: String) -> Bool {

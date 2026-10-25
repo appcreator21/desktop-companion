@@ -23,7 +23,7 @@ windows and the Dock, and does real tasks when you ask. It's a free, original ge
 - [ ] Multi-monitor polish (Dock on another screen, hopping between screens)
 
 ## Stage 3: Smart
-- [x] Claude chat with tools (optional API key, stored in Keychain)
+- [x] Claude chat through your Claude Code login (no API bill), API key as fallback
 - [ ] Voice: push-to-talk with Speech framework + spoken replies
 - [ ] See the screen (screenshot → Claude) so he can explain what you're looking at
 - [ ] Memory of your preferences between launches

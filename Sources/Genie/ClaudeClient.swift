@@ -3,9 +3,12 @@ import Foundation
 enum GenieError: LocalizedError {
     case noKey
     case api(status: Int, message: String)
+    case claudeCode(String)
 
     var errorDescription: String? {
         switch self {
+        case let .claudeCode(message):
+            return message
         case .noKey:
             return "I need a Claude API key for that. Add one from the 🧞 menu."
         case let .api(status, message):

@@ -19,7 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var brain: GenieBrain!
     private var chat: ChatController!
     private var powers: Powers!
-    private let claude = ClaudeClient()
+    private let claudeCode = ClaudeCodeClient()   // uses your Claude plan (free with your subscription)
+    private let claude = ClaudeClient()           // optional API key fallback
     private var statusItem: NSStatusItem!
     private var hotKey: HotKey?
 
@@ -79,15 +80,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func respond(to text: String) async -> String {
+        let hasAI = claudeCode.isAvailable || claude.hasKey
         // Simple commands run instantly and for free, no AI needed.
-        if let local = await powers.handleLocally(text, hasClaude: claude.hasKey) {
+        if let local = await powers.handleLocally(text, hasClaude: hasAI) {
             return local
         }
-        guard claude.hasKey else { return Powers.helpText }
         do {
-            return try await claude.send(text) { name, input in
-                await self.powers.run(tool: name, input: input)
+            // 1st choice: Claude Code, signed in with your Claude plan (no API bill).
+            if claudeCode.isAvailable {
+                return try await claudeCode.send(text) { name, input in
+                    await self.powers.run(tool: name, input: input)
+                }
             }
+            // 2nd choice: an API key, if you added one.
+            if claude.hasKey {
+                return try await claude.send(text) { name, input in
+                    await self.powers.run(tool: name, input: input)
+                }
+            }
+            return Powers.helpText
         } catch {
             return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

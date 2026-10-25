@@ -40,11 +40,15 @@ These work for free, with no AI:
 He also does things on his own: wanders around, sits on top of the window you're using, watches
 your cursor, and falls asleep when you're away. Hover over him for a second to wake him up, and drag him anywhere.
 
-## Optional: real AI chat with Claude
+## AI chat with your Claude plan (no API bill)
 
-Choose 🧞 → **Set Claude API key…** and paste a key from [console.anthropic.com](https://console.anthropic.com).
-After that, anything that isn't a simple command goes to Claude, which can use all of the genie's powers
-(open/quit/hide apps, websites, focus timer). The key is stored in your Keychain. API usage is billed by Anthropic.
+If [Claude Code](https://claude.com/claude-code) is installed and you've signed in once
+(run `claude` in Terminal), the genie uses it automatically for anything that isn't a simple command.
+Chats count toward your Claude plan's usage, not API billing. Claude replies with what to say plus a
+list of actions (open/quit/hide apps, websites, focus timer), and the genie performs them.
+Chats are saved as Claude Code sessions, so they show up in `claude --resume`.
+
+No Claude Code? You can instead choose 🧞 → **Set Claude API key…**. That uses the Claude API, which is billed separately.
 
 ## Permissions
 
@@ -63,7 +67,8 @@ After that, anything that isn't a simple command goes to Claude, which can use a
 | `ChatBar.swift` | The frosted chat bar |
 | `Powers.swift` | What he can do, plus the free built-in commands |
 | `MacActions.swift` | macOS calls: apps, windows, Dock icons |
-| `ClaudeClient.swift` | Claude Messages API with tool use |
+| `ClaudeCodeClient.swift` | Chat through your signed-in Claude Code (`claude -p`) |
+| `ClaudeClient.swift` | Optional fallback: Claude API key with tool use |
 | `Support.swift` | Floating windows, hotkey, Keychain |
 
 See [PLAN.md](PLAN.md) for the roadmap.
