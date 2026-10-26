@@ -198,3 +198,116 @@ enum MacActions {
         return value
     }
 }
+
+// MARK: - Closing windows (the red ✕)
+
+extension MacActions {
+    struct CloseTarget {
+        let appName: String
+        /// Where the red close button is (AppKit coordinates).
+        let point: CGPoint
+        /// The real button, when we have Accessibility access.
+        let button: AXUIElement?
+    }
+
+    /// Finds the red close button on an app's front window.
+    static func closeButton(forApp raw: String) -> CloseTarget? {
+        guard let app = runningApp(named: raw), app != NSRunningApplication.current else { return nil }
+        let name = app.localizedName ?? raw
+        let pid = app.processIdentifier
+
+        if isTrusted {
+            let element = AXUIElementCreateApplication(pid)
+            let window = attribute(element, kAXFocusedWindowAttribute)
+                ?? (attribute(element, kAXWindowsAttribute) as? [AXUIElement])?.first
+            if let window, CFGetTypeID(window) == AXUIElementGetTypeID() {
+                let win = window as! AXUIElement
+                if let close = attribute(win, kAXCloseButtonAttribute), CFGetTypeID(close) == AXUIElementGetTypeID() {
+                    let button = close as! AXUIElement
+                    if let frame = frame(of: button) {
+                        return CloseTarget(appName: name, point: CGPoint(x: frame.midX, y: frame.midY), button: button)
+                    }
+                }
+            }
+        }
+
+        // No Accessibility access: guess from the window list. The red dot sits ~20pt in, ~16pt down.
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]],
+              let info = list.first(where: {
+                  ($0[kCGWindowOwnerPID as String] as? Int32) == pid && ($0[kCGWindowLayer as String] as? Int) == 0
+              }),
+              let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
+              let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
+        else { return nil }
+        let frame = toAppKit(bounds)
+        return CloseTarget(appName: name, point: CGPoint(x: frame.minX + 20, y: frame.maxY - 16), button: nil)
+    }
+
+    static func press(_ element: AXUIElement) -> Bool {
+        AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
+    }
+
+    private static func frame(of element: AXUIElement) -> CGRect? {
+        guard let positionValue = attribute(element, kAXPositionAttribute),
+              let sizeValue = attribute(element, kAXSizeAttribute) else { return nil }
+        var origin = CGPoint.zero
+        var size = CGSize.zero
+        AXValueGetValue(positionValue as! AXValue, .cgPoint, &origin)
+        AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
+        return toAppKit(CGRect(origin: origin, size: size))
+    }
+}
+
+// MARK: - Running scripts (AppleScript and shell)
+
+extension MacActions {
+    /// Runs a program off the main thread and returns its combined output and exit code.
+    static func runProcess(_ executable: String, _ args: [String], input: String? = nil,
+                           timeout: Double = 60) async -> (output: String, status: Int32) {
+        await Task.detached {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = args
+            process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+            var env = ProcessInfo.processInfo.environment
+            let extra = ["/opt/homebrew/bin", "/usr/local/bin", NSHomeDirectory() + "/.local/bin"]
+            env["PATH"] = (extra + [env["PATH"] ?? "/usr/bin:/bin"]).joined(separator: ":")
+            process.environment = env
+
+            let out = Pipe()
+            process.standardOutput = out
+            process.standardError = out
+            let inPipe = Pipe()
+            process.standardInput = input == nil ? FileHandle.nullDevice : inPipe
+            do { try process.run() } catch { return ("Couldn't run: \(error.localizedDescription)", -1) }
+            if let input {
+                inPipe.fileHandleForWriting.write(Data(input.utf8))
+                try? inPipe.fileHandleForWriting.close()
+            }
+            let killer = DispatchWorkItem { if process.isRunning { process.terminate() } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            killer.cancel()
+            var text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if text.count > 4000 { text = String(text.prefix(4000)) + "\n…(cut off)" }
+            return (text, process.terminationStatus)
+        }.value
+    }
+
+    static func runAppleScript(_ source: String) async -> (output: String, status: Int32) {
+        await runProcess("/usr/bin/osascript", ["-"], input: source)
+    }
+
+    static func runShell(_ command: String) async -> (output: String, status: Int32) {
+        await runProcess("/bin/zsh", ["-lc", command])
+    }
+
+    /// The app named in `tell application "X"`, so the genie can fly over to it.
+    static func appTold(in script: String) -> String? {
+        guard let range = script.range(of: #"tell application "([^"]+)""#, options: .regularExpression) else { return nil }
+        let match = script[range]
+        return match.split(separator: "\"").dropFirst().first.map(String.init)
+    }
+}

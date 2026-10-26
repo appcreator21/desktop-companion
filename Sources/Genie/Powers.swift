@@ -39,8 +39,11 @@ final class Powers {
             if MacActions.knownSite(rest) != nil || !hasClaude { return await openWebsite(rest).0 }
             return nil
         }
-        if let rest = text.dropPrefix(["quit ", "close "]), words <= 4 {
+        if let rest = text.dropPrefix(["quit "]), words <= 4 {
             return await quitApp(rest).0
+        }
+        if let rest = text.dropPrefix(["close "]), words <= 4 {
+            return await closeWindow(rest).0
         }
         if let rest = text.dropPrefix(["hide "]), words <= 4 {
             return hideApp(rest).0
@@ -48,8 +51,9 @@ final class Powers {
         if let rest = text.dropPrefix(["search for ", "search ", "google ", "look up "]) {
             return await openWebsite(rest, forceSearch: true).0
         }
-        if text.contains("stop focus") || text.contains("stop the timer") || text.contains("stop timer")
-            || text.contains("cancel timer") {
+        let stopWords = ["stop focus", "stop the timer", "stop timer", "cancel timer", "cancel the timer",
+                         "end focus", "end the timer", "end timer", "stop focusing", "i'm done", "im done"]
+        if stopWords.contains(where: text.contains) || (brain.isFocusing && ["stop", "cancel", "done", "end"].contains(text)) {
             brain.stopFocus(completed: false)
             return "Okay, timer stopped."
         }
@@ -96,6 +100,12 @@ final class Powers {
         case "take_a_nap":
             brain.nap()
             return ("The genie is napping now.", false)
+        case "close_window":
+            return await closeWindow(input["name"] as? String ?? "")
+        case "run_applescript":
+            return await runAppleScript(input["script"] as? String ?? "")
+        case "run_shell":
+            return await runShell(input["command"] as? String ?? "")
         default:
             return ("Unknown tool: \(tool)", true)
         }
@@ -139,6 +149,40 @@ final class Powers {
         }
         await brain.performTap(at: MacActions.dockIconCenter(for: appName) ?? brain.defaultTapSpot)
         return app.terminate() ? ("Bye bye, \(appName) 👋", false) : ("\(appName) didn't want to quit.", true)
+    }
+
+    /// Flies to the red ✕ on the app's front window and clicks it.
+    func closeWindow(_ name: String) async -> (String, Bool) {
+        guard let target = MacActions.closeButton(forApp: name) else {
+            return ("I don't see a “\(name)” window open.", true)
+        }
+        await brain.performTap(at: target.point)
+        if let button = target.button, MacActions.press(button) {
+            return ("Closed \(target.appName)'s window ✨", false)
+        }
+        // No Accessibility access: ask the app politely instead.
+        let script = "tell application \"\(target.appName)\" to close front window"
+        let (output, status) = await MacActions.runAppleScript(script)
+        if status == 0 { return ("Closed \(target.appName)'s window ✨", false) }
+        return ("I couldn't press it. Give me Accessibility access in the 🧞 menu and I'll click it for real. (\(output.prefix(120)))", true)
+    }
+
+    func runAppleScript(_ script: String) async -> (String, Bool) {
+        guard !script.isEmpty else { return ("Empty script.", true) }
+        // Fly over to the app he's about to boss around, if we can see its Dock icon.
+        if let app = MacActions.appTold(in: script), let dock = MacActions.dockIconCenter(for: app) {
+            await brain.performTap(at: dock)
+        }
+        let (output, status) = await MacActions.runAppleScript(script)
+        return (status == 0 ? (output.isEmpty ? "(done, no output)" : output) : "AppleScript error \(status): \(output)",
+                status != 0)
+    }
+
+    func runShell(_ command: String) async -> (String, Bool) {
+        guard !command.isEmpty else { return ("Empty command.", true) }
+        let (output, status) = await MacActions.runShell(command)
+        return (status == 0 ? (output.isEmpty ? "(done, no output)" : output) : "Exit code \(status): \(output)",
+                status != 0)
     }
 
     func hideApp(_ name: String) -> (String, Bool) {

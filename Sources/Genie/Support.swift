@@ -113,3 +113,39 @@ enum Keychain {
         return String(data: data, encoding: .utf8)
     }
 }
+
+// MARK: - Start at login
+
+/// Starts Genie when you log in, using a LaunchAgent in ~/Library/LaunchAgents.
+/// (SMAppService needs a signed .app bundle; this works for the `swift build` binary too.)
+enum LoginItem {
+    private static let label = "com.genie.companion"
+
+    private static var plistURL: URL {
+        URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/LaunchAgents/\(label).plist")
+    }
+
+    static var isEnabled: Bool { FileManager.default.fileExists(atPath: plistURL.path) }
+
+    static func set(enabled: Bool) throws {
+        if !enabled {
+            try? FileManager.default.removeItem(at: plistURL)
+            return
+        }
+        // The real path of this running binary (swift run starts it through a relative path).
+        let exe = URL(fileURLWithPath: CommandLine.arguments[0],
+                      relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
+            .standardizedFileURL.resolvingSymlinksInPath().path
+        let plist: [String: Any] = [
+            "Label": label,
+            "ProgramArguments": [exe],
+            "RunAtLoad": true,
+            "ProcessType": "Interactive",
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try FileManager.default.createDirectory(at: plistURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try data.write(to: plistURL)
+    }
+}

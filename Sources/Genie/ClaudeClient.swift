@@ -146,6 +146,12 @@ final class ClaudeClient {
              ["minutes": ["type": "integer", "description": "Length in minutes, usually 25"]]),
         tool("stop_focus_timer", "Stop the focus timer early.", [:]),
         tool("take_a_nap", "Make the genie fly to the Dock and take a nap.", [:]),
+        tool("close_window", "Fly over and click the red close button on an app's front window.",
+             ["name": ["type": "string", "description": "The app's name"]]),
+        tool("run_applescript", "Run AppleScript with osascript to control any app or the system. Returns the output.",
+             ["script": ["type": "string", "description": "Full AppleScript source"]]),
+        tool("run_shell", "Run a zsh command in the user's home folder (60s limit). Returns the output.",
+             ["command": ["type": "string", "description": "The shell command"]]),
     ]
 
     private static func tool(_ name: String, _ description: String, _ properties: [String: Any]) -> [String: Any] {

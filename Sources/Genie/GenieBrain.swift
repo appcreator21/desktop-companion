@@ -16,6 +16,14 @@ enum Pose: Equatable {
     case idle, flying, sleeping, thinking, talking, tapping, focusing, happy
 }
 
+/// The lamp he lives in until you rub it awake.
+enum LampState: Equatable {
+    case none
+    case waiting
+    /// Pouring out of the lamp; the value is when it started (seconds since reference date).
+    case emerging(Double)
+}
+
 struct Bubble: Equatable {
     let id = UUID()
     var text: String
@@ -32,9 +40,14 @@ final class GenieBrain: ObservableObject {
     @Published private(set) var facing: CGFloat = 1
     @Published private(set) var look: CGPoint = .zero
     @Published private(set) var focusRemaining: Int?
+    @Published private(set) var lampState: LampState = .waiting
+    /// 0…1, how much you've rubbed the lamp so far (it glows and shakes more).
+    @Published private(set) var lampRub: Double = 0
 
     var onTap: (() -> Void)?
     var hasPendingQuestion: Bool { question != nil }
+    var isFocusing: Bool { focusEnd != nil }
+    var isInLamp: Bool { lampState != .none }
 
     private enum Activity {
         case idle
@@ -44,6 +57,7 @@ final class GenieBrain: ObservableObject {
         case sleeping
         case busy
         case dragging
+        case inLamp
     }
 
     private let window: NSWindow
@@ -52,7 +66,10 @@ final class GenieBrain: ObservableObject {
     private var velocity = CGVector.zero
     private var target: CGPoint?
     private var arrival: CheckedContinuation<Bool, Never>?
-    private var activity: Activity = .idle
+    private var activity: Activity = .inLamp
+    private var lastRubX: CGFloat?
+    private var rubDirection: CGFloat = 0
+    private var rubTravel: CGFloat = 0
     private var nextDecision = Date().addingTimeInterval(5)
     private var nextPerchCheck = Date()
     private var lastTick = CACurrentMediaTime()
@@ -71,8 +88,13 @@ final class GenieBrain: ObservableObject {
 
     init(window: NSWindow) {
         self.window = window
-        let frame = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
-        position = CGPoint(x: frame.midX, y: frame.midY)
+        position = Self.lampSpot
+    }
+
+    /// Bottom-right corner of the main screen, just above the Dock.
+    private static var lampSpot: CGPoint {
+        let f = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
+        return CGPoint(x: f.maxX - 150, y: f.minY + Layout.figure / 2)
     }
 
     func start() {
@@ -124,8 +146,9 @@ final class GenieBrain: ObservableObject {
             if now > nextPerchCheck {
                 nextPerchCheck = now.addingTimeInterval(0.4)
                 // Stay on the window while it's one of the front few; move with it.
-                if let win = MacActions.windows().prefix(4).first(where: { $0.id == windowID }) {
-                    target = perchPoint(on: win.frame, fraction: fraction)
+                if let win = MacActions.windows().prefix(4).first(where: { $0.id == windowID }),
+                   let spot = perchPoint(on: win.frame, fraction: fraction) {
+                    target = spot
                 } else {
                     activity = .idle
                     nextDecision = now.addingTimeInterval(2)
@@ -152,6 +175,9 @@ final class GenieBrain: ObservableObject {
 
         case .busy, .dragging:
             break
+
+        case .inLamp:
+            updateRubbing(mouse: mouse)
         }
     }
 
@@ -228,7 +254,12 @@ final class GenieBrain: ObservableObject {
 
     /// Clicks pass through to your apps everywhere except on the genie himself.
     private func updateMousePassThrough(mouse: CGPoint) {
-        var hit = genieRect.contains(mouse)
+        var hit: Bool
+        switch lampState {
+        case .none: hit = genieRect.contains(mouse) || (focusEnd != nil && timerRect.contains(mouse))
+        case .waiting: hit = lampRect.contains(mouse)
+        case .emerging: hit = false
+        }
         if let bubble, !bubble.buttons.isEmpty, bubbleRect.contains(mouse) { hit = true }
         if case .dragging = activity { hit = true }
         if window.ignoresMouseEvents == hit { window.ignoresMouseEvents = !hit }
@@ -236,6 +267,16 @@ final class GenieBrain: ObservableObject {
 
     private var genieRect: CGRect {
         CGRect(x: position.x - 48, y: position.y - 82, width: 96, height: 150)
+    }
+
+    /// The lamp, drawn in the bottom part of his window while he's inside it.
+    private var lampRect: CGRect {
+        CGRect(x: position.x - 62, y: position.y - Layout.figure / 2 + 8, width: 124, height: 70)
+    }
+
+    /// The focus timer pill under him (it has a stop button).
+    private var timerRect: CGRect {
+        CGRect(x: position.x - 70, y: position.y - Layout.figure / 2, width: 140, height: 34)
     }
 
     private var bubbleRect: CGRect {
@@ -264,11 +305,27 @@ final class GenieBrain: ObservableObject {
         target = clamp(point)
     }
 
+    /// Keeps him fully on screen (below the menu bar), on whichever screen is closest to the point.
     private func clamp(_ p: CGPoint) -> CGPoint {
-        let screen = NSScreen.screens.first(where: { $0.frame.contains(p) }) ?? NSScreen.main ?? NSScreen.screens[0]
+        let screen = Self.screen(nearest: p)
         let f = screen.frame
+        let top = screen.visibleFrame.maxY - Self.headroom
         return CGPoint(x: min(max(p.x, f.minX + 50), f.maxX - 50),
-                       y: min(max(p.y, f.minY + 40), f.maxY - 75))
+                       y: min(max(p.y, f.minY + 40), top))
+    }
+
+    /// How far his head sticks up above his center.
+    private static let headroom: CGFloat = 80
+
+    private static func screen(nearest p: CGPoint) -> NSScreen {
+        if let hit = NSScreen.screens.first(where: { $0.frame.contains(p) }) { return hit }
+        func distance(_ s: NSScreen) -> CGFloat {
+            let f = s.frame
+            let dx = max(f.minX - p.x, 0, p.x - f.maxX)
+            let dy = max(f.minY - p.y, 0, p.y - f.maxY)
+            return hypot(dx, dy)
+        }
+        return NSScreen.screens.min(by: { distance($0) < distance($1) }) ?? NSScreen.main ?? NSScreen.screens[0]
     }
 
     private func randomPoint() -> CGPoint {
@@ -278,9 +335,12 @@ final class GenieBrain: ObservableObject {
         return CGPoint(x: .random(in: f.minX...f.maxX), y: .random(in: f.minY...f.maxY))
     }
 
-    private func perchPoint(on frame: CGRect, fraction: CGFloat) -> CGPoint {
-        // Float just above the window's top edge so his smoke tail rests on it.
-        CGPoint(x: frame.minX + frame.width * fraction, y: frame.maxY + 76)
+    /// Floats just above the window's top edge so his smoke tail rests on it.
+    /// Nil when the window reaches the top of the screen and there's no room above it.
+    private func perchPoint(on frame: CGRect, fraction: CGFloat) -> CGPoint? {
+        let spot = CGPoint(x: frame.minX + frame.width * fraction, y: frame.maxY + 76)
+        let screen = Self.screen(nearest: CGPoint(x: spot.x, y: frame.maxY - 1))
+        return spot.y + Self.headroom <= screen.visibleFrame.maxY ? spot : nil
     }
 
     private var mainVisibleFrame: CGRect { (NSScreen.main ?? NSScreen.screens[0]).visibleFrame }
@@ -317,12 +377,14 @@ final class GenieBrain: ObservableObject {
 
     @discardableResult
     private func perchOnWindow() -> Bool {
-        let windows = MacActions.windows()
-        guard let first = windows.first else { return false }
-        let chosen = Double.random(in: 0..<1) < 0.6 ? first : (windows.prefix(3).randomElement() ?? first)
         let fraction = CGFloat.random(in: 0.15...0.85)
+        // Only windows with room above them (full-height windows would push him off the top).
+        let options = MacActions.windows().prefix(3).filter { perchPoint(on: $0.frame, fraction: fraction) != nil }
+        guard let first = options.first else { return false }
+        let chosen = Double.random(in: 0..<1) < 0.6 ? first : (options.randomElement() ?? first)
+        guard let spot = perchPoint(on: chosen.frame, fraction: fraction) else { return false }
         activity = .perching(window: chosen.id, fraction: fraction)
-        setTarget(perchPoint(on: chosen.frame, fraction: fraction))
+        setTarget(spot)
         return true
     }
 
@@ -384,6 +446,81 @@ final class GenieBrain: ObservableObject {
             Task { await flyTo(perch) }
         } else if focusEnd != nil {
             Task { await flyTo(focusSpot) }
+        }
+    }
+
+    // MARK: - The lamp
+
+    /// Rubbing = moving the mouse back and forth over the lamp (no click needed).
+    private func updateRubbing(mouse: CGPoint) {
+        guard lampState == .waiting else { return }
+        let dt = 1.0 / 60.0
+        guard lampRect.insetBy(dx: -10, dy: -10).contains(mouse) else {
+            lastRubX = nil
+            if lampRub > 0 { lampRub = max(0, lampRub - dt * 0.12) }
+            return
+        }
+        defer { lastRubX = mouse.x }
+        guard let last = lastRubX else { return }
+        let dx = mouse.x - last
+        guard abs(dx) > 0.5 else {
+            if lampRub > 0 { lampRub = max(0, lampRub - dt * 0.05) }
+            return
+        }
+        let direction: CGFloat = dx > 0 ? 1 : -1
+        rubTravel += abs(dx)
+        if direction != rubDirection {
+            // A back-and-forth stroke counts much more than just passing over.
+            if rubTravel > 14, rubDirection != 0 { lampRub = min(1, lampRub + 0.09) }
+            rubDirection = direction
+            rubTravel = 0
+        } else {
+            lampRub = min(1, lampRub + Double(abs(dx)) / 2500)
+        }
+        if lampRub >= 1 { emergeFromLamp() }
+    }
+
+    func lampTapped() {
+        say(["Psst… rub the lamp! ✨", "Rub rub rub! Back and forth!", "Let me ouuut… rub the lamp 🪔"].randomElement()!, seconds: 3)
+    }
+
+    private func emergeFromLamp() {
+        guard lampState == .waiting else { return }
+        let start = Date().timeIntervalSinceReferenceDate
+        lampState = .emerging(start)
+        activity = .busy
+        NSSound(named: "Purr")?.play()
+        Task {
+            try? await Task.sleep(for: .seconds(Self.emergeSeconds))
+            lampState = .none
+            lampRub = 0
+            setPose(.happy, for: 2)
+            activity = .busy
+            await flyTo(CGPoint(x: position.x - 120, y: position.y + 170))
+            if case .busy = activity { activity = .idle }
+            nextDecision = Date().addingTimeInterval(6)
+            say(["POOF! ✨ Your genie is here! Press ⌥Space or click me to make a wish.",
+                 "Ahh, 10,000 years in there gives you such a crick in the neck! What's your wish? ✨",
+                 "You rang? ✨ Press ⌥Space or click me to make a wish."].randomElement()!)
+        }
+    }
+
+    static let emergeSeconds = 2.2
+
+    /// Flies back to the corner and hops into the lamp until you rub it again.
+    func returnToLamp() {
+        guard lampState == .none else { return }
+        stopFocus(completed: false)
+        wakeQuietly()
+        activity = .busy
+        say("Back to my lamp! Rub it when you need me ✨", seconds: 3)
+        Task {
+            await flyTo(Self.lampSpot)
+            position = Self.lampSpot
+            lampRub = 0
+            lastRubX = nil
+            lampState = .waiting
+            activity = .inLamp
         }
     }
 

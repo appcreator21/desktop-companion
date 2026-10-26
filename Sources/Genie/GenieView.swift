@@ -17,21 +17,32 @@ struct GenieRootView: View {
             .animation(.spring(response: 0.3, dampingFraction: 0.75), value: brain.bubble)
 
             ZStack(alignment: .bottom) {
-                GenieFigure(pose: brain.pose, look: brain.look)
-                    .frame(width: Layout.figure, height: Layout.figure)
-                    .scaleEffect(x: brain.facing, y: 1)
-                    .rotationEffect(.degrees(brain.lean))
-                    .contentShape(Rectangle().inset(by: 30))
-                    .onTapGesture { brain.tapped() }
-                    .gesture(
-                        DragGesture(minimumDistance: 3)
-                            .onChanged { _ in brain.dragChanged() }
-                            .onEnded { _ in brain.dragEnded() }
-                    )
-                if let seconds = brain.focusRemaining {
-                    TimerPill(seconds: seconds)
-                        .padding(.bottom, 2)
+                switch brain.lampState {
+                case .none:
+                    GenieFigure(pose: brain.pose, look: brain.look)
+                        .frame(width: Layout.figure, height: Layout.figure)
+                        .scaleEffect(x: brain.facing, y: 1)
+                        .rotationEffect(.degrees(brain.lean))
+                        .contentShape(Rectangle().inset(by: 30))
+                        .onTapGesture { brain.tapped() }
+                        .gesture(
+                            DragGesture(minimumDistance: 3)
+                                .onChanged { _ in brain.dragChanged() }
+                                .onEnded { _ in brain.dragEnded() }
+                        )
+                case .waiting:
+                    LampFigure(rub: brain.lampRub, emergeStart: nil)
+                        .frame(width: Layout.figure, height: Layout.figure)
+                        .contentShape(Rectangle())
+                        .onTapGesture { brain.lampTapped() }
+                case let .emerging(start):
+                    LampFigure(rub: 1, emergeStart: start)
+                        .frame(width: Layout.figure, height: Layout.figure)
                         .allowsHitTesting(false)
+                }
+                if let seconds = brain.focusRemaining {
+                    TimerPill(seconds: seconds) { brain.stopFocus(completed: false) }
+                        .padding(.bottom, 2)
                 }
             }
             .frame(width: Layout.width, height: Layout.figure)
@@ -74,17 +85,148 @@ struct BubbleView: View {
 /// The little countdown clock he naps next to during focus mode.
 struct TimerPill: View {
     let seconds: Int
+    var onStop: () -> Void = {}
 
     var body: some View {
-        Text(String(format: "%02d:%02d", seconds / 60, seconds % 60))
-            .font(.system(size: 18, weight: .semibold, design: .rounded))
-            .monospacedDigit()
+        HStack(spacing: 8) {
+            Text(String(format: "%02d:%02d", seconds / 60, seconds % 60))
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+            Button(action: onStop) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+            }
+            .buttonStyle(.plain)
+            .help("Stop the focus timer")
+        }
             .foregroundStyle(Color(red: 0.25, green: 0.2, blue: 0.15))
             .padding(.horizontal, 14)
             .padding(.vertical, 5)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(red: 0.97, green: 0.91, blue: 0.79)))
             .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+    }
+}
+
+/// The gold lamp he sleeps in. While emerging, smoke pours out and he grows out of it.
+struct LampFigure: View {
+    var rub: Double
+    /// When the emergence started, or nil while waiting to be rubbed.
+    var emergeStart: Double?
+
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            let p = emergeStart.map { min(1, max(0, (t - $0) / GenieBrain.emergeSeconds)) } ?? 0
+            // Shakes harder the more you rub, then rattles wildly as he comes out.
+            let shake = emergeStart == nil ? rub * 5 : 6 * (1 - p)
+            let lampOpacity = p < 0.75 ? 1 : max(0, 1 - (p - 0.75) / 0.25)
+            ZStack {
+                if emergeStart != nil {
+                    let grow = easeOut(min(1, max(0, (p - 0.2) / 0.65)))
+                    GenieFigure(pose: p > 0.8 ? .happy : .flying, look: CGPoint(x: 0, y: -0.4))
+                        .scaleEffect(0.08 + 0.92 * grow, anchor: UnitPoint(x: 0.82, y: 0.68))
+                        .opacity(min(1, p * 4))
+                }
+                Canvas { context, size in
+                    LampArt.draw(in: context, size: size, t: t, rub: rub, emerge: p)
+                }
+                .rotationEffect(.degrees(sin(t * 38) * shake), anchor: .bottom)
+                .opacity(lampOpacity)
+                if emergeStart != nil {
+                    Canvas { context, size in
+                        LampArt.drawSmoke(in: context, size: size, p: p)
+                    }
+                }
+            }
+        }
+    }
+
+    private func easeOut(_ x: Double) -> Double { 1 - pow(1 - x, 3) }
+}
+
+/// Drawing code for the lamp. Same 170x170 canvas as the genie, y grows downward.
+enum LampArt {
+    static let gold = Color(red: 1.0, green: 0.80, blue: 0.28)
+    static let goldDeep = Color(red: 0.80, green: 0.55, blue: 0.10)
+    static let goldShine = Color(red: 1.0, green: 0.95, blue: 0.72)
+    /// Tip of the spout, where the smoke comes out.
+    static let spout = CGPoint(x: 150, y: 112)
+
+    static func draw(in context: GraphicsContext, size: CGSize, t: Double, rub: Double, emerge: Double) {
+        let cx = size.width / 2
+
+        // Magic glow that builds up as you rub.
+        let glow = 0.15 + rub * 0.75 + (sin(t * 3) + 1) * 0.04
+        context.fill(Path(ellipseIn: CGRect(x: cx - 75, y: 78, width: 150, height: 90)),
+                     with: .radialGradient(Gradient(colors: [gold.opacity(glow), gold.opacity(0)]),
+                                           center: CGPoint(x: cx, y: 128), startRadius: 4, endRadius: 75))
+
+        var ctx = context
+        ctx.addFilter(.shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 3))
+        ctx.drawLayer { layer in
+            let metal = GraphicsContext.Shading.linearGradient(
+                Gradient(colors: [goldShine, gold, goldDeep]),
+                startPoint: CGPoint(x: cx - 30, y: 104), endPoint: CGPoint(x: cx + 30, y: 156))
+
+            // Handle (a loop on the left).
+            var handle = Path()
+            handle.move(to: CGPoint(x: cx - 36, y: 120))
+            handle.addCurve(to: CGPoint(x: cx - 40, y: 140), control1: CGPoint(x: cx - 62, y: 112),
+                            control2: CGPoint(x: cx - 64, y: 146))
+            layer.stroke(handle, with: .color(goldDeep), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+
+            // Spout curving up to the right.
+            var spoutPath = Path()
+            spoutPath.move(to: CGPoint(x: cx + 26, y: 122))
+            spoutPath.addQuadCurve(to: CGPoint(x: spout.x, y: spout.y - 3), control: CGPoint(x: cx + 52, y: 120))
+            spoutPath.addLine(to: CGPoint(x: spout.x + 2, y: spout.y + 4))
+            spoutPath.addQuadCurve(to: CGPoint(x: cx + 24, y: 142), control: CGPoint(x: cx + 50, y: 140))
+            spoutPath.closeSubpath()
+            layer.fill(spoutPath, with: metal)
+
+            // Base and body.
+            layer.fill(Path(roundedRect: CGRect(x: cx - 18, y: 146, width: 36, height: 10), cornerRadius: 4), with: metal)
+            layer.fill(Path(ellipseIn: CGRect(x: cx - 40, y: 112, width: 80, height: 38)), with: metal)
+
+            // Lid and knob.
+            layer.fill(Path(ellipseIn: CGRect(x: cx - 18, y: 104, width: 36, height: 18)), with: metal)
+            layer.fill(Path(ellipseIn: CGRect(x: cx - 5, y: 97, width: 10, height: 10)), with: .color(gold))
+            layer.fill(Path(ellipseIn: CGRect(x: cx - 3, y: 118, width: 6, height: 6)), with: .color(GenieArt.ruby))
+
+            // Shine.
+            var shine = Path()
+            shine.move(to: CGPoint(x: cx - 26, y: 124))
+            shine.addQuadCurve(to: CGPoint(x: cx - 4, y: 118), control: CGPoint(x: cx - 18, y: 117))
+            layer.stroke(shine, with: .color(.white.opacity(0.7)), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+        }
+
+        // Sparkles fly off while you rub.
+        if rub > 0.05 && emerge == 0 {
+            for i in 0..<5 {
+                let phase = fmod(t * 0.9 + Double(i) / 5, 1)
+                let angle = Double(i) * 1.3 + t * 0.4
+                let r = 30 + phase * 45
+                let p = CGPoint(x: cx + CGFloat(cos(angle) * r), y: 126 - CGFloat(abs(sin(angle)) * r))
+                let size = CGFloat(2 + rub * 4) * CGFloat(1 - phase)
+                context.fill(GenieArt.sparkle(at: p, r: size), with: .color(gold.opacity(rub * (1 - phase))))
+            }
+        }
+    }
+
+    /// Blue smoke billowing up out of the spout as he appears.
+    static func drawSmoke(in context: GraphicsContext, size: CGSize, p: Double) {
+        let amount = p < 0.6 ? p / 0.6 : max(0, 1 - (p - 0.6) / 0.4)
+        guard amount > 0 else { return }
+        for i in 0..<14 {
+            let f = Double(i) / 14
+            let rise = min(1, p * 1.6 + f * 0.2)
+            let x = spout.x - CGFloat(rise * 70) + CGFloat(sin(f * 9 + p * 6)) * 10
+            let y = spout.y - CGFloat(rise * 90 * (0.4 + f))
+            let r = CGFloat(6 + f * 14) * CGFloat(0.4 + rise)
+            context.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)),
+                         with: .color(GenieArt.skinLight.opacity(0.55 * amount * (1 - f * 0.5))))
+        }
     }
 }
 
@@ -377,6 +519,8 @@ enum GenieArt {
             break
         }
     }
+
+    static func sparkle(at c: CGPoint, r: CGFloat) -> Path { star(at: c, r: r) }
 
     private static func star(at c: CGPoint, r: CGFloat) -> Path {
         var p = Path()

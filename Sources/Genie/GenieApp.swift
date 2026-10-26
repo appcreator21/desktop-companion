@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let claude = ClaudeClient()           // optional API key fallback
     private var statusItem: NSStatusItem!
     private var hotKey: HotKey?
+    private var loginItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The genie's own little floating window.
@@ -47,11 +48,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupMenu()
         hotKey = HotKey(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey)) { [weak self] in
-            self?.chat.toggle()
+            self?.talk()
         }
 
         brain.start()
-        brain.say("Hi! I'm your genie ✨ Press ⌥Space or click me to make a wish.")
+        // He starts inside his lamp. Rub it (wiggle the mouse over it) to let him out.
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            if brain.isInLamp { brain.lampTapped() }
+        }
     }
 
     // MARK: - Chat handling
@@ -88,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             // 1st choice: Claude Code, signed in with your Claude plan (no API bill).
             if claudeCode.isAvailable {
-                return try await claudeCode.send(text) { name, input in
+                return try await claudeCode.send(text, progress: { self.brain.say($0) }) { name, input in
                     await self.powers.run(tool: name, input: input)
                 }
             }
@@ -116,7 +121,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(menu, "Stop focus timer", #selector(stopFocus))
         add(menu, "Follow my cursor", #selector(follow))
         add(menu, "Nap / wake up", #selector(nap))
+        add(menu, "Back into the lamp", #selector(backToLamp))
         menu.addItem(.separator())
+        loginItem = add(menu, "Start Genie when I log in", #selector(toggleLogin))
+        loginItem.state = LoginItem.isEnabled ? .on : .off
         add(menu, "Set Claude API key…", #selector(setKey))
         add(menu, "Grant Accessibility access…", #selector(grantAccess))
         menu.addItem(.separator())
@@ -124,12 +132,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    private func add(_ menu: NSMenu, _ title: String, _ action: Selector) {
+    @discardableResult
+    private func add(_ menu: NSMenu, _ title: String, _ action: Selector) -> NSMenuItem {
         let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
         item.target = self
+        return item
     }
 
-    @objc private func talk() { chat.show() }
+    @objc private func talk() {
+        // No wishes until you let him out of the lamp.
+        if brain.isInLamp { brain.lampTapped(); return }
+        chat.isVisible ? chat.hide() : chat.show()
+    }
+    @objc private func backToLamp() {
+        chat.hide()
+        brain.returnToLamp()
+    }
+    @objc private func toggleLogin() {
+        let enable = !LoginItem.isEnabled
+        do {
+            try LoginItem.set(enabled: enable)
+            loginItem.state = enable ? .on : .off
+            brain.say(enable ? "I'll be waiting in my lamp every time you log in ✨" : "Okay, I won't start on my own.")
+        } catch {
+            brain.say("I couldn't change that: \(error.localizedDescription)")
+        }
+    }
     @objc private func focus25() { brain.startFocus(minutes: 25) }
     @objc private func stopFocus() { brain.stopFocus(completed: false) }
     @objc private func follow() { brain.followCursor(seconds: 10) }
