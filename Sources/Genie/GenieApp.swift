@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var hotKey: HotKey?
     private var loginItem: NSMenuItem!
+    private var followItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The genie's own little floating window.
@@ -119,7 +120,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(menu, "Talk to Genie  (⌥Space)", #selector(talk))
         add(menu, "Focus for 25 minutes", #selector(focus25))
         add(menu, "Stop focus timer", #selector(stopFocus))
-        add(menu, "Follow my cursor", #selector(follow))
+        followItem = add(menu, "Follow my cursor", #selector(follow))
+        followItem.state = brain.followsCursor ? .on : .off
         add(menu, "Nap / wake up", #selector(nap))
         add(menu, "Back into the lamp", #selector(backToLamp))
         menu.addItem(.separator())
@@ -160,7 +162,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func focus25() { brain.startFocus(minutes: 25) }
     @objc private func stopFocus() { brain.stopFocus(completed: false) }
-    @objc private func follow() { brain.followCursor(seconds: 10) }
+    @objc private func follow() {
+        brain.followsCursor.toggle()
+        followItem.state = brain.followsCursor ? .on : .off
+        brain.say(brain.followsCursor ? "Right behind you! ✨" : "Okay, I'll stop following you.", seconds: 3)
+    }
     @objc private func nap() { brain.toggleNap() }
     @objc private func grantAccess() { MacActions.requestAccessibility() }
     @objc private func quit() { NSApp.terminate(nil) }

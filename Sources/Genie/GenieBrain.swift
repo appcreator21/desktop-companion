@@ -368,7 +368,7 @@ final class GenieBrain: ObservableObject {
             setTarget(randomPoint())
         } else if roll < 0.75, perchOnWindow() {
             // Perched on top of a window.
-        } else if roll < 0.88 {
+        } else if roll < 0.88, followsCursor {
             followCursor(seconds: 5)
         } else {
             activity = .idle // Just hang out and look around.
@@ -388,10 +388,27 @@ final class GenieBrain: ObservableObject {
         return true
     }
 
+    /// The "Follow my cursor" switch. On: he tags along until you turn it off.
+    /// Off: he stops and never starts following on his own. Remembered between launches.
+    var followsCursor: Bool {
+        get { UserDefaults.standard.bool(forKey: "followsCursor") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "followsCursor")
+            if newValue {
+                followCursor(seconds: .greatestFiniteMagnitude)
+            } else if case .following = activity {
+                activity = .idle
+                target = nil
+                nextDecision = Date().addingTimeInterval(6)
+            }
+        }
+    }
+
     func followCursor(seconds: Double) {
+        guard lampState == .none else { return }
         wakeQuietly()
         finishFlight(arrived: false)
-        activity = .following(until: Date().addingTimeInterval(seconds))
+        activity = .following(until: seconds.isFinite && seconds < 1e9 ? Date().addingTimeInterval(seconds) : .distantFuture)
     }
 
     func toggleNap() {
@@ -446,6 +463,8 @@ final class GenieBrain: ObservableObject {
             Task { await flyTo(perch) }
         } else if focusEnd != nil {
             Task { await flyTo(focusSpot) }
+        } else if followsCursor {
+            followCursor(seconds: .greatestFiniteMagnitude)
         }
     }
 
@@ -499,6 +518,7 @@ final class GenieBrain: ObservableObject {
             await flyTo(CGPoint(x: position.x - 120, y: position.y + 170))
             if case .busy = activity { activity = .idle }
             nextDecision = Date().addingTimeInterval(6)
+            if followsCursor { followCursor(seconds: .greatestFiniteMagnitude) }
             say(["POOF! ✨ Your genie is here! Press ⌥Space or click me to make a wish.",
                  "Ahh, 10,000 years in there gives you such a crick in the neck! What's your wish? ✨",
                  "You rang? ✨ Press ⌥Space or click me to make a wish."].randomElement()!)
